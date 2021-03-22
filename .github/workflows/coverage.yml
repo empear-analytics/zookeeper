@@ -1,8 +1,5 @@
-name: Build
+name: Run Tests With Clover
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 jobs:
   build:
@@ -16,22 +13,21 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: 11
-      - name: Cache SonarCloud packages
-        uses: actions/cache@v1
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
       - name: Cache Maven packages
         uses: actions/cache@v1
         with:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-      - run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # Configure credentials
+      - uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+      # Run build steps
       - run: mvn clean clover:setup
       - run: mvn test
       - run: mvn clover:aggregate clover:clover 
+        if: always()
+      - run: aws s3 cp ./target/site/clover/clover.xml s3://codescene-on-prem/code-coverage-data/apache/zookeeper/clover.xml 
