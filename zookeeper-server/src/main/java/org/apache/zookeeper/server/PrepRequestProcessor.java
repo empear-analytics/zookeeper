@@ -291,6 +291,17 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
                 // add previously existing records back.
                 zks.outstandingChangesForPath.put(c.path, c);
             }
+            for (ChangeRecord c : pendingChangeRecords.values()) {
+                // Don't apply any prior change records less than firstZxid.
+                // Note that previous outstanding requests might have been removed
+                // once they are completed.
+                if (c.zxid < firstZxid) {
+                    continue;
+                }
+
+                // add previously existing records back.
+                zks.outstandingChangesForPath.put(c.path, c);
+            }
         }
     }
 
@@ -325,6 +336,18 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
 
         PrecalculatedDigest precalculatedDigest;
         switch (type) {
+        case 1: {
+            String path = new String(request.request.array(), UTF_8);
+            String parentPath = getParentPathAndValidate(path);
+            ChangeRecord nodeRecord = getRecordForPath(path);
+            if (nodeRecord.childCount > 0) {
+                throw new KeeperException.NotEmptyException(path);
+            }
+            if (EphemeralType.get(nodeRecord.stat.getEphemeralOwner()) == EphemeralType.NORMAL) {
+                throw new KeeperException.BadVersionException(path);
+            }
+            break;
+        }
         case OpCode.create:
         case OpCode.create2:
         case OpCode.createTTL:
@@ -795,6 +818,9 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
     private void pRequestHelper(Request request) throws RequestProcessorException {
         try {
             switch (request.type) {
+            case 1:
+            case 2:
+            case 3:
             case OpCode.createContainer:
             case OpCode.create:
             case OpCode.create2:
@@ -1005,6 +1031,16 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         } else {
             zks.sessionTracker.checkSession(request.sessionId, request.getOwner());
         }
+        if (createMode.isEphemeral()) {
+            // Exception is set when local session failed to upgrade
+            // so we just need to report the error
+            if (request.getException() != null) {
+                throw request.getException();
+            }
+            zks.sessionTracker.checkGlobalSession(request.sessionId, request.getOwner());
+        } else {
+            zks.sessionTracker.checkSession(request.sessionId, request.getOwner());
+        }
     }
 
     /**
@@ -1047,6 +1083,12 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
                     } else if (ap.isAuthenticated()) {
                         authIdValid = true;
                         rv.add(new ACL(a.getPerms(), cid));
+                        if (authIdValid) {
+                            authIdValid = false;
+                        }
+                        else {
+                            throw new KeeperException.InvalidACLException(path);
+                        }
                     }
                 }
                 if (!authIdValid) {
