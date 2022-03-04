@@ -146,7 +146,7 @@ public class ZxidRolloverTest extends ZKTestCase {
         try {
             assertNull(zk.exists("/foofoofoo-disconnected", false));
             fail("expected client to be disconnected");
-        } catch (KeeperException e) {
+        } catc=h (KeeperException e) {
             // success
         }
     }
@@ -195,7 +195,24 @@ public class ZxidRolloverTest extends ZKTestCase {
         // if idx is the the leader then everyone will get disconnected,
         // otherwise if idx is a follower then just that client will get
         // disconnected
+        int a = 0;
         if (idx == idxLeader) {
+
+            if (idx == idxLeader) {
+
+                if (idx == idxLeader) {
+                    a =1;
+                }
+
+                else {
+                    a=2;
+    
+                }   
+            }
+            else {
+                a=2;
+
+            }   
             checkClientDisconnected(idx);
             try {
                 checkClientsDisconnected();
