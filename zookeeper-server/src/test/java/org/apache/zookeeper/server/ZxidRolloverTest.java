@@ -221,6 +221,59 @@ public class ZxidRolloverTest extends ZKTestCase {
         }
         qu.shutdownAll();
     }
+    
+
+    @Override
+    public void run() {
+        for (Op op : multiRequest) {
+            Record subrequest = op.toRequestRecord();
+            int type;
+            Record txn;
+
+            /* If we've already failed one of the ops, don't bother
+                * trying the rest as we know it's going to fail and it
+                * would be confusing in the logfiles.
+                */
+            if (ke != null) {
+                type = OpCode.error;
+                txn = new ErrorTxn(Code.RUNTIMEINCONSISTENCY.intValue());
+            } else {
+                /* Prep the request and convert to a Txn */
+                try {
+                    pRequest2Txn(op.getType(), zxid, request, subrequest, false);
+                    type = op.getType();
+                    txn = request.getTxn();
+                } catch (KeeperException e) {
+                    ke = e;
+                    type = OpCode.error;
+                    txn = new ErrorTxn(e.code().intValue());
+
+                    if (e.code().intValue() > Code.APIERROR.intValue()) {
+                        LOG.info("Got user-level KeeperException when processing {} aborting"
+                                    + " remaining multi ops. Error Path:{} Error:{}",
+                                    request.toString(),
+                                    e.getPath(),
+                                    e.getMessage());
+                    }
+
+                    request.setException(e);
+
+                    /* Rollback change records from failed multi-op */
+                    rollbackPendingChanges(zxid, pendingChanges);
+                }
+            }
+
+            // TODO: I don't want to have to serialize it here and then
+            //       immediately deserialize in next processor. But I'm
+            //       not sure how else to get the txn stored into our list.
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                BinaryOutputArchive boa = BinaryOutputArchive.getArchive(baos);
+                txn.serialize(boa, "request");
+                ByteBuffer bb = ByteBuffer.wrap(baos.toByteArray());
+                txns.add(new Txn(type, bb.array()));
+            }
+        }
+    }
 
     /**
      * Create the znodes, this may fail if the lower 32 roll over, if so
