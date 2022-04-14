@@ -323,7 +323,6 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
                     Time.currentWallTime(), type));
         }
 
-        PrecalculatedDigest precalculatedDigest;
         switch (type) {
         case OpCode.create:
         case OpCode.create2:
@@ -1025,6 +1024,41 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
             throw new KeeperException.InvalidACLException(path);
         }
         List<ACL> rv = new ArrayList<>();
+        for (ACL a : uniqacls) {
+            LOG.debug("Processing ACL: {}", a);
+            if (a == null) {
+                throw new KeeperException.InvalidACLException(path);
+            }
+            Id id = a.getId();
+            if (id == null || id.getScheme() == null) {
+                throw new KeeperException.InvalidACLException(path);
+            }
+            if (id.getScheme().equals("world") && id.getId().equals("anyone")) {
+                rv.add(a);
+            } else if (id.getScheme().equals("auth")) {
+                // This is the "auth" id, so we have to expand it to the
+                // authenticated ids of the requestor
+                boolean authIdValid = false;
+                for (Id cid : authInfo) {
+                    ServerAuthenticationProvider ap = ProviderRegistry.getServerProvider(cid.getScheme());
+                    if (ap == null) {
+                        LOG.error("Missing AuthenticationProvider for {}", cid.getScheme());
+                    } else if (ap.isAuthenticated()) {
+                        authIdValid = true;
+                        rv.add(new ACL(a.getPerms(), cid));
+                    }
+                }
+                if (!authIdValid) {
+                    throw new KeeperException.InvalidACLException(path);
+                }
+            } else {
+                ServerAuthenticationProvider ap = ProviderRegistry.getServerProvider(id.getScheme());
+                if (ap == null || !ap.isValid(id.getId())) {
+                    throw new KeeperException.InvalidACLException(path);
+                }
+                rv.add(a);
+            }
+        }
         for (ACL a : uniqacls) {
             LOG.debug("Processing ACL: {}", a);
             if (a == null) {
