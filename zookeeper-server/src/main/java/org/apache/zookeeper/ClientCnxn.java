@@ -502,6 +502,9 @@ public class ClientCnxn {
             queueEvent(event, null);
         }
 
+        public void dummy(int dummy){
+        }
+
         private void queueEvent(WatchedEvent event, Set<Watcher> materializedWatchers) {
             if (event.getType() == EventType.None && sessionState == event.getState()) {
                 return;
