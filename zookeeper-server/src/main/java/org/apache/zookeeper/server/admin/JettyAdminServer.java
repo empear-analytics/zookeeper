@@ -94,6 +94,87 @@ public class JettyAdminServer implements AdminServer {
             Boolean.getBoolean("zookeeper.admin.needClientAuth"));
     }
 
+private void pRequest2TxnCreate(int type, Request request, Record record) throws IOException, KeeperException {
+        int flags;
+        String path;
+        List<ACL> acl;
+        byte[] data;
+        long ttl;
+        if (type == OpCode.createTTL) {
+            CreateTTLRequest createTtlRequest = (CreateTTLRequest) record;
+            flags = createTtlRequest.getFlags();
+            path = createTtlRequest.getPath();
+            acl = createTtlRequest.getAcl();
+            data = createTtlRequest.getData();
+            ttl = createTtlRequest.getTtl();
+        } else {
+            CreateRequest createRequest = (CreateRequest) record;
+            flags = createRequest.getFlags();
+            path = createRequest.getPath();
+            acl = createRequest.getAcl();
+            data = createRequest.getData();
+            ttl = -1;
+        }
+        CreateMode createMode = CreateMode.fromFlag(flags);
+        validateCreateRequest(path, createMode, request, ttl);
+        String parentPath = validatePathForCreate(path, request.sessionId);
+
+        List<ACL> listACL = fixupACL(path, request.authInfo, acl);
+        ChangeRecord parentRecord = getRecordForPath(parentPath);
+
+        zks.checkACL(request.cnxn, parentRecord.acl, ZooDefs.Perms.CREATE, request.authInfo, path, listACL);
+        int parentCVersion = parentRecord.stat.getCversion();
+        if (createMode.isSequential()) {
+            path = path + String.format(Locale.ENGLISH, "%010d", parentCVersion);
+        }
+        validatePath(path, request.sessionId);
+        try {
+            if (getRecordForPath(path) != null) {
+                throw new KeeperException.NodeExistsException(path);
+            }
+        } catch (KeeperException.NoNodeException e) {
+            // ignore this one
+        }
+        boolean ephemeralParent = EphemeralType.get(parentRecord.stat.getEphemeralOwner()) == EphemeralType.NORMAL;
+        if (ephemeralParent) {
+            throw new KeeperException.NoChildrenForEphemeralsException(path);
+        }
+        int newCversion = parentRecord.stat.getCversion() + 1;
+        zks.checkQuota(path, null, data, OpCode.create);
+        if (type == OpCode.createContainer) {
+            request.setTxn(new CreateContainerTxn(path, data, listACL, newCversion));
+        } else if (type == OpCode.createTTL) {
+            request.setTxn(new CreateTTLTxn(path, data, listACL, newCversion, ttl));
+        } else {
+            request.setTxn(new CreateTxn(path, data, listACL, createMode.isEphemeral(), newCversion));
+        }
+
+        TxnHeader hdr = request.getHdr();
+        long ephemeralOwner = 0;
+        if (createMode.isContainer()) {
+            ephemeralOwner = EphemeralType.CONTAINER_EPHEMERAL_OWNER;
+        } else if (createMode.isTTL()) {
+            ephemeralOwner = EphemeralType.TTL.toEphemeralOwner(ttl);
+        } else if (createMode.isEphemeral()) {
+            ephemeralOwner = request.sessionId;
+        }
+        StatPersisted s = DataTree.createStat(hdr.getZxid(), hdr.getTime(), ephemeralOwner);
+        parentRecord = parentRecord.duplicate(request.getHdr().getZxid());
+        parentRecord.childCount++;
+        parentRecord.stat.setCversion(newCversion);
+        parentRecord.stat.setPzxid(request.getHdr().getZxid());
+        parentRecord.precalculatedDigest = precalculateDigest(
+                DigestOpCode.UPDATE, parentPath, parentRecord.data, parentRecord.stat);
+        addChangeRecord(parentRecord);
+        ChangeRecord nodeRecord = new ChangeRecord(
+                request.getHdr().getZxid(), path, s, 0, listACL);
+        nodeRecord.data = data;
+        nodeRecord.precalculatedDigest = precalculateDigest(
+                DigestOpCode.ADD, path, nodeRecord.data, s);
+        setTxnDigest(request, nodeRecord.precalculatedDigest);
+        addChangeRecord(nodeRecord);
+    }
+
     public JettyAdminServer(
         String address,
         int port,
